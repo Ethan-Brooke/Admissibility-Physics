@@ -119,16 +119,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 If you use this work in your research, please cite:
 
-```bibtex
-@misc{admissibility_physics_2026,
-  title={Admissibility Physics: Complete Mathematical Foundations},
-  author={[Your Name]},
-  year={2026},
-  note={A Unified Framework Deriving Quantum Mechanics, Gauge Theory, 
-        General Relativity, and the Standard Model from First Principles}
-}
-```
+Ethan Brooke
 
 ## Contact
 
-[Ethan Brooke find me at Brooke.Ethan@gmail.com ]
+[Brooke.Ethan@gmail.com ]
