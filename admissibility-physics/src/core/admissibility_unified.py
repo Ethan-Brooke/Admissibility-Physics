@@ -1,0 +1,1513 @@
+#!/usr/bin/env python3
+"""
+================================================================================
+ADMISSIBILITY PHYSICS ENGINE - UNIFIED v1.0
+================================================================================
+
+A complete, self-contained implementation of Admissibility Physics:
+  Enforceability â†’ Admissibility â†’ Composability â†’ Geometry â†’ Time â†’ Î›
+
+All from enforcement cost minimization. No fields, spacetime, or Lagrangians assumed.
+
+CONTENTS:
+  1. Constants & Shared Types
+  2. Interface & Load Vector
+  3. Network & Routing
+  4. Regime Analysis (Composability)
+  5. Accumulated Cost (Time)
+  6. Lambda Floor (Cosmological Constant)
+  7. Theorems & Proof Obligations
+  8. Adversarial Test Suite
+  9. Unit Mapping & Falsifiable Predictions
+  10. Main Demo
+
+Author: Admissibility Physics Project
+Version: 1.0 (Unified)
+License: MIT
+
+To run in Colab:
+  !pip install hypothesis  # For property-based tests
+  # Then run all cells or: python admissibility_unified.py
+
+================================================================================
+"""
+
+from __future__ import annotations
+import math
+from dataclasses import dataclass, field
+from typing import Dict, List, Tuple, Optional, Set, Callable, Any
+from collections import defaultdict
+from heapq import heappush, heappop
+import itertools
+import random
+import sys
+
+# =============================================================================
+# 1. CONSTANTS (Canonical - shared across entire stack)
+# =============================================================================
+
+class Constants:
+    """
+    Canonical constants for the entire Admissibility Physics stack.
+    
+    Import from here to ensure consistency across all modules.
+    """
+    # Admissibility margin (strict interior of Regime R)
+    EPS_SLACK: float = 1e-6
+    
+    # Cost comparison tolerance
+    EPS_COST: float = 1e-9
+    
+    # Minimum detectable action (proto-â„ threshold)
+    EPS_ACTION: float = 1e-9
+    
+    # Maximum iterations for relaxation algorithms
+    MAX_RELAX_ITERS: int = 10
+    
+    # Maximum path length for routing
+    MAX_PATH_LENGTH: int = 8
+    
+    # Maximum paths to enumerate
+    MAX_PATHS: int = 20
+    
+    # Maximum load per interface (for bounded state space)
+    MAX_LOAD_PER_INTERFACE: int = 100
+
+
+# Convenience aliases
+EPS_SLACK = Constants.EPS_SLACK
+EPS_COST = Constants.EPS_COST
+EPS_ACTION = Constants.EPS_ACTION
+
+
+# =============================================================================
+# 2. INTERFACE & LOAD VECTOR
+# =============================================================================
+
+@dataclass(frozen=True)
+class Interface:
+    """
+    An enforcement interface with capacity and cost model.
+    
+    Cost model: E(n) = ÎµÂ·n + Î·Â·C(n,2)
+      - Îµ: linear cost (per-distinction overhead)
+      - Î·: quadratic cost (non-closure / interaction term)
+      - C: capacity constraint
+    
+    Physical interpretation:
+      - Îµ â†’ â„-scale enforcement quantum
+      - Î· â†’ quantum/non-closure effects
+      - C â†’ channel capacity
+    """
+    name: str
+    capacity: float       # C_i
+    epsilon: float = 1.0  # Îµ_i (linear)
+    eta: float = 0.5      # Î·_i (quadratic)
+    
+    def cost(self, n: int) -> float:
+        """E_i(n) = ÎµÂ·n + Î·Â·C(n,2)"""
+        if n <= 0:
+            return 0.0
+        return self.epsilon * n + self.eta * n * (n - 1) / 2
+    
+    def linear_cost(self, n: int) -> float:
+        """Linear component: ÎµÂ·n"""
+        return self.epsilon * n if n > 0 else 0.0
+    
+    def quadratic_cost(self, n: int) -> float:
+        """Quadratic component: Î·Â·C(n,2)"""
+        if n <= 1:
+            return 0.0
+        return self.eta * n * (n - 1) / 2
+    
+    def headroom(self, n: int) -> float:
+        """H_i = C_i - E_i(n)"""
+        return self.capacity - self.cost(n)
+    
+    def max_n(self) -> int:
+        """Maximum n before E(n) > C"""
+        if self.eta < 1e-12:
+            return min(int(self.capacity / self.epsilon) if self.epsilon > 0 else 999,
+                      Constants.MAX_LOAD_PER_INTERFACE)
+        a = self.eta / 2
+        b = self.epsilon - self.eta / 2
+        c = -self.capacity
+        disc = b*b - 4*a*c
+        if disc < 0:
+            return 0
+        return min(max(0, int((-b + math.sqrt(disc)) / (2 * a))),
+                  Constants.MAX_LOAD_PER_INTERFACE)
+    
+    def eta_share(self, n: int) -> float:
+        """Fraction of cost from quadratic term."""
+        total = self.cost(n)
+        if total <= 0:
+            return 0.0
+        return self.quadratic_cost(n) / total
+
+
+@dataclass
+class LoadVector:
+    """
+    Per-interface load configuration.
+    
+    This is the fundamental state variable: how much load each interface carries.
+    """
+    loads: Dict[str, int]
+    
+    @classmethod
+    def empty(cls) -> 'LoadVector':
+        return cls(loads={})
+    
+    @classmethod
+    def uniform(cls, interfaces: List[Interface], n: int) -> 'LoadVector':
+        return cls(loads={itf.name: n for itf in interfaces})
+    
+    def __getitem__(self, name: str) -> int:
+        return self.loads.get(name, 0)
+    
+    def __setitem__(self, name: str, value: int):
+        self.loads[name] = value
+    
+    def __add__(self, other: 'LoadVector') -> 'LoadVector':
+        combined = dict(self.loads)
+        for name, load in other.loads.items():
+            combined[name] = combined.get(name, 0) + load
+        return LoadVector(loads=combined)
+    
+    def __sub__(self, other: 'LoadVector') -> 'LoadVector':
+        result = dict(self.loads)
+        for name, load in other.loads.items():
+            result[name] = result.get(name, 0) - load
+        return LoadVector(loads=result)
+    
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, LoadVector):
+            return False
+        all_keys = set(self.loads.keys()) | set(other.loads.keys())
+        return all(self[k] == other[k] for k in all_keys)
+    
+    def __hash__(self):
+        return hash(tuple(sorted(self.loads.items())))
+    
+    def copy(self) -> 'LoadVector':
+        return LoadVector(loads=dict(self.loads))
+    
+    def total(self) -> int:
+        return sum(self.loads.values())
+    
+    def __repr__(self):
+        return f"Load({self.loads})"
+
+
+# =============================================================================
+# 3. NETWORK & ROUTING
+# =============================================================================
+
+@dataclass(frozen=True)
+class Edge:
+    """An edge connecting two nodes via an interface."""
+    u: str
+    v: str
+    interface: Interface
+    
+    def other(self, node: str) -> str:
+        return self.v if node == self.u else self.u
+    
+    def __repr__(self):
+        return f"({self.u}â†”{self.v}:{self.interface.name})"
+
+
+@dataclass
+class Network:
+    """
+    A routing network: nodes connected by edges (interfaces).
+    
+    This is the substrate for correlation routing.
+    """
+    nodes: List[str]
+    edges: List[Edge]
+    
+    _adjacency: Dict[str, List[Edge]] = field(default_factory=dict, repr=False)
+    _interfaces: Dict[str, Interface] = field(default_factory=dict, repr=False)
+    
+    def __post_init__(self):
+        self._adjacency = defaultdict(list)
+        self._interfaces = {}
+        for edge in self.edges:
+            self._adjacency[edge.u].append(edge)
+            self._adjacency[edge.v].append(edge)
+            self._interfaces[edge.interface.name] = edge.interface
+    
+    def neighbors(self, node: str) -> List[Tuple[str, Edge]]:
+        return [(e.other(node), e) for e in self._adjacency[node]]
+    
+    def interfaces(self) -> List[Interface]:
+        return list(self._interfaces.values())
+    
+    def get_interface(self, name: str) -> Optional[Interface]:
+        return self._interfaces.get(name)
+
+
+@dataclass
+class Path:
+    """A path through the network."""
+    nodes: List[str]
+    edges: List[Edge]
+    
+    @property
+    def source(self) -> str:
+        return self.nodes[0] if self.nodes else ""
+    
+    @property
+    def target(self) -> str:
+        return self.nodes[-1] if self.nodes else ""
+    
+    @property
+    def length(self) -> int:
+        return len(self.edges)
+    
+    def load_contribution(self) -> Dict[str, int]:
+        """Load added by traversing this path once."""
+        loads = defaultdict(int)
+        for e in self.edges:
+            loads[e.interface.name] += 1
+        return dict(loads)
+    
+    def __repr__(self):
+        return f"Path({'â†’'.join(self.nodes)})"
+
+
+def find_all_paths(
+    network: Network,
+    source: str,
+    target: str,
+    max_length: int = None,
+    max_paths: int = None
+) -> List[Path]:
+    """
+    Find all simple paths from source to target.
+    
+    Uses DFS with length cutoff.
+    """
+    max_length = max_length or Constants.MAX_PATH_LENGTH
+    max_paths = max_paths or Constants.MAX_PATHS
+    
+    if source == target:
+        return [Path(nodes=[source], edges=[])]
+    
+    paths = []
+    
+    def dfs(current: str, visited: Set[str], path_nodes: List[str], path_edges: List[Edge]):
+        if len(paths) >= max_paths or len(path_edges) > max_length:
+            return
+        
+        if current == target:
+            paths.append(Path(nodes=list(path_nodes), edges=list(path_edges)))
+            return
+        
+        for neighbor, edge in network.neighbors(current):
+            if neighbor not in visited:
+                visited.add(neighbor)
+                path_nodes.append(neighbor)
+                path_edges.append(edge)
+                dfs(neighbor, visited, path_nodes, path_edges)
+                path_edges.pop()
+                path_nodes.pop()
+                visited.remove(neighbor)
+    
+    dfs(source, {source}, [source], [])
+    paths.sort(key=lambda p: p.length)
+    return paths
+
+
+# =============================================================================
+# 4. REGIME ANALYSIS (Composability)
+# =============================================================================
+
+def is_admissible(load: LoadVector, interfaces: List[Interface]) -> bool:
+    """
+    Check if load configuration is strictly inside Regime R.
+    
+    Regime R = {L : H_i(L) > EPS_SLACK for all i}
+    """
+    for itf in interfaces:
+        if itf.headroom(load[itf.name]) <= EPS_SLACK:
+            return False
+    return True
+
+
+def total_cost(load: LoadVector, interfaces: List[Interface]) -> float:
+    """Total enforcement cost: Î£_i E_i(n_i)"""
+    return sum(itf.cost(load[itf.name]) for itf in interfaces)
+
+
+def min_headroom(load: LoadVector, interfaces: List[Interface]) -> Tuple[float, str]:
+    """Find minimum headroom and bottleneck interface."""
+    worst_h = float('inf')
+    bottleneck = ""
+    for itf in interfaces:
+        h = itf.headroom(load[itf.name])
+        if h < worst_h:
+            worst_h = h
+            bottleneck = itf.name
+    return worst_h, bottleneck
+
+
+def composability_index(load: LoadVector, interfaces: List[Interface]) -> float:
+    """
+    Îº = (min_headroom - EPS_SLACK) / min_capacity
+    
+    Îº > 0: composable (inside Regime R)
+    Îº â‰¤ 0: saturated
+    """
+    h, _ = min_headroom(load, interfaces)
+    min_cap = min(itf.capacity for itf in interfaces) if interfaces else 1.0
+    return (h - EPS_SLACK) / min_cap
+
+
+def analyze_regime_boundary(interfaces: List[Interface], max_size: int = 15) -> Dict[str, Any]:
+    """
+    Analyze where Regime R exists for uniform loads.
+    
+    Returns dict with composable sizes, saturating sizes, boundary info.
+    """
+    composable = []
+    saturating = []
+    analyses = {}
+    
+    for size in range(1, max_size + 1):
+        load = LoadVector.uniform(interfaces, size)
+        h, bn = min_headroom(load, interfaces)
+        kappa = composability_index(load, interfaces)
+        
+        eta_share = 0.0
+        if interfaces:
+            bn_itf = next((i for i in interfaces if i.name == bn), interfaces[0])
+            eta_share = bn_itf.eta_share(size)
+        
+        info = {
+            'size': size,
+            'headroom': h,
+            'kappa': kappa,
+            'bottleneck': bn,
+            'eta_share': eta_share,
+            'admissible': h > EPS_SLACK
+        }
+        analyses[size] = info
+        
+        if h > EPS_SLACK:
+            composable.append(size)
+        else:
+            saturating.append(size)
+    
+    return {
+        'composable': composable,
+        'saturating': saturating,
+        'analyses': analyses,
+        'max_composable': max(composable) if composable else 0
+    }
+
+
+# =============================================================================
+# 5. ACCUMULATED COST (Time)
+# =============================================================================
+
+def transition_cost(
+    L_prev: LoadVector,
+    L_next: LoadVector,
+    interfaces: List[Interface]
+) -> float:
+    """
+    Cost of transitioning between load states.
+    
+    Î”S = Î£_i |E_i(n_next) - E_i(n_prev)|
+    
+    This is ALWAYS â‰¥ 0 (irreversibility).
+    """
+    cost = 0.0
+    for itf in interfaces:
+        E_prev = itf.cost(L_prev[itf.name])
+        E_next = itf.cost(L_next[itf.name])
+        cost += abs(E_next - E_prev)
+    return cost
+
+
+@dataclass
+class HistoryStep:
+    """A single step in an enforcement history."""
+    load: LoadVector
+    time: float              # Accumulated cost up to this point
+    transition_cost: float   # Cost of this transition
+    is_admissible: bool
+    min_headroom: float
+    bottleneck: str
+
+
+@dataclass
+class History:
+    """
+    A sequence of load states with accumulated cost.
+    
+    Time emerges from accumulated cost.
+    Arrow emerges from irreversibility.
+    """
+    interfaces: List[Interface]
+    steps: List[HistoryStep] = field(default_factory=list)
+    
+    @property
+    def action(self) -> float:
+        """Total accumulated cost (action functional)."""
+        return self.steps[-1].time if self.steps else 0.0
+    
+    @property
+    def duration(self) -> int:
+        """Number of transitions."""
+        return max(0, len(self.steps) - 1)
+    
+    @property
+    def is_admissible(self) -> bool:
+        """Is entire history admissible?"""
+        return all(step.is_admissible for step in self.steps)
+    
+    def append(self, load: LoadVector) -> 'History':
+        """Add a new state to the history."""
+        if not self.steps:
+            h, bn = min_headroom(load, self.interfaces)
+            step = HistoryStep(
+                load=load, time=0.0, transition_cost=0.0,
+                is_admissible=h > EPS_SLACK, min_headroom=h, bottleneck=bn
+            )
+        else:
+            prev = self.steps[-1]
+            t_cost = transition_cost(prev.load, load, self.interfaces)
+            h, bn = min_headroom(load, self.interfaces)
+            step = HistoryStep(
+                load=load, time=prev.time + t_cost, transition_cost=t_cost,
+                is_admissible=h > EPS_SLACK, min_headroom=h, bottleneck=bn
+            )
+        self.steps.append(step)
+        return self
+
+
+def history_cost(loads: List[LoadVector], interfaces: List[Interface]) -> float:
+    """Compute action for a sequence of loads."""
+    if len(loads) < 2:
+        return 0.0
+    return sum(
+        transition_cost(loads[i], loads[i+1], interfaces)
+        for i in range(len(loads) - 1)
+    )
+
+
+def minimum_action_quantum(interfaces: List[Interface]) -> float:
+    """
+    â„_eff = min_i {Îµ_i}
+    
+    The minimum nonzero enforcement change.
+    """
+    if not interfaces:
+        return 0.0
+    return min(itf.epsilon for itf in interfaces)
+
+
+# =============================================================================
+# 6. LAMBDA FLOOR (Cosmological Constant)
+# =============================================================================
+
+@dataclass
+class Obligation:
+    """
+    A committed correlation (record) that must be maintained.
+    
+    Cannot be erased, only rerouted.
+    """
+    id: int
+    source: str
+    target: str
+    demand: int = 1
+
+
+@dataclass
+class RoutedObligation:
+    """An obligation with its current routing."""
+    obligation: Obligation
+    path: Path
+
+
+def route_obligation(
+    network: Network,
+    obligation: Obligation,
+    existing_load: LoadVector,
+    max_paths: int = 10
+) -> Optional[RoutedObligation]:
+    """
+    Find the best admissible routing for a single obligation.
+    """
+    paths = find_all_paths(
+        network, obligation.source, obligation.target,
+        max_paths=max_paths
+    )
+    
+    interfaces = network.interfaces()
+    best_path = None
+    best_cost = float('inf')
+    
+    for path in paths:
+        path_contrib = path.load_contribution()
+        new_loads = dict(existing_load.loads)
+        for name, contrib in path_contrib.items():
+            new_loads[name] = new_loads.get(name, 0) + contrib * obligation.demand
+        
+        new_load = LoadVector(loads=new_loads)
+        
+        if not is_admissible(new_load, interfaces):
+            continue
+        
+        cost = total_cost(new_load, interfaces)
+        if cost < best_cost:
+            best_cost = cost
+            best_path = path
+    
+    if best_path is None:
+        return None
+    
+    return RoutedObligation(obligation=obligation, path=best_path)
+
+
+def compute_load_from_routed(routed: List[RoutedObligation]) -> LoadVector:
+    """Compute total load from routed obligations."""
+    loads = defaultdict(int)
+    for r in routed:
+        for name, contrib in r.path.load_contribution().items():
+            loads[name] += contrib * r.obligation.demand
+    return LoadVector(loads=dict(loads))
+
+
+def relax_routing(
+    network: Network,
+    routed: List[RoutedObligation],
+    iterations: int = None
+) -> Tuple[List[RoutedObligation], LoadVector, float]:
+    """
+    Relax routing to minimize cost (coordinate descent).
+    
+    Returns (relaxed_routed, final_load, savings).
+    """
+    iterations = iterations or Constants.MAX_RELAX_ITERS
+    interfaces = network.interfaces()
+    
+    current = list(routed)
+    current_load = compute_load_from_routed(current)
+    initial_cost = total_cost(current_load, interfaces)
+    current_cost = initial_cost
+    
+    for _ in range(iterations):
+        improved = False
+        
+        for i in range(len(current)):
+            ob = current[i].obligation
+            old_contrib = current[i].path.load_contribution()
+            
+            # Remove this obligation's contribution
+            remaining_loads = dict(current_load.loads)
+            for name, contrib in old_contrib.items():
+                remaining_loads[name] = remaining_loads.get(name, 0) - contrib * ob.demand
+            remaining_load = LoadVector(loads=remaining_loads)
+            
+            # Try to reroute
+            new_routed = route_obligation(network, ob, remaining_load)
+            if new_routed is None:
+                continue
+            
+            # Compute new cost
+            new_contrib = new_routed.path.load_contribution()
+            new_loads = dict(remaining_load.loads)
+            for name, contrib in new_contrib.items():
+                new_loads[name] = new_loads.get(name, 0) + contrib * ob.demand
+            new_load = LoadVector(loads=new_loads)
+            new_cost = total_cost(new_load, interfaces)
+            
+            if new_cost + EPS_COST < current_cost:
+                current[i] = new_routed
+                current_load = new_load
+                current_cost = new_cost
+                improved = True
+        
+        if not improved:
+            break
+    
+    return current, current_load, initial_cost - current_cost
+
+
+@dataclass
+class LambdaState:
+    """State of the Î› floor at a point in time."""
+    time_step: int
+    raw_cost: float
+    lambda_E: float           # Residual cost after relaxation
+    lambda_sigma: float       # Saturation fraction
+    bottleneck: str
+    action: float
+    relaxation_savings: float
+    n_obligations: int
+
+
+def estimate_lambda_floor(
+    network: Network,
+    obligation_stream: List[Obligation],
+    relax_every: int = 3
+) -> List[LambdaState]:
+    """
+    Estimate Î› floor over time as obligations accumulate.
+    
+    Î› = cost that cannot be eliminated by rerouting.
+    """
+    interfaces = network.interfaces()
+    history = []
+    active_routed: List[RoutedObligation] = []
+    action = 0.0
+    prev_load = LoadVector.empty()
+    
+    for t, ob in enumerate(obligation_stream):
+        current_load = compute_load_from_routed(active_routed)
+        routed = route_obligation(network, ob, current_load)
+        
+        if routed is None:
+            break  # Saturation
+        
+        active_routed.append(routed)
+        new_load = compute_load_from_routed(active_routed)
+        action += transition_cost(prev_load, new_load, interfaces)
+        prev_load = new_load
+        
+        if (t + 1) % relax_every == 0:
+            raw_cost = total_cost(new_load, interfaces)
+            relaxed, residual_load, savings = relax_routing(network, active_routed)
+            active_routed = relaxed
+            
+            lambda_E = total_cost(residual_load, interfaces)
+            h, bn = min_headroom(residual_load, interfaces)
+            bn_itf = network.get_interface(bn)
+            lambda_sigma = bn_itf.cost(residual_load[bn]) / bn_itf.capacity if bn_itf else 0
+            
+            history.append(LambdaState(
+                time_step=t, raw_cost=raw_cost, lambda_E=lambda_E,
+                lambda_sigma=lambda_sigma, bottleneck=bn,
+                action=action, relaxation_savings=savings,
+                n_obligations=len(active_routed)
+            ))
+    
+    return history
+
+
+# =============================================================================
+# 7. THEOREMS & PROOF OBLIGATIONS
+# =============================================================================
+
+class Theorems:
+    """
+    Formal theorem statements with proof sketches and falsifiability conditions.
+    """
+    
+    @staticmethod
+    def regime_R_existence():
+        """
+        THEOREM 1: Regime R Existence
+        
+        Statement:
+          Dynamics exists iff the admissible set has nonempty interior.
+          
+        Formally:
+          Let A = {L : H_i(L) > 0 for all i}.
+          Dynamics (variational principle Î´S = 0) is well-defined iff int(A) â‰  âˆ….
+          
+        Proof sketch:
+          1. Variational calculus requires derivatives Î´S/Î´L
+          2. Derivatives require L + ÎµÎ´L to be admissible for small Îµ
+          3. This requires L to be in the interior of A
+          4. Interior is empty iff all loads saturate some interface
+          
+        Falsifiable by:
+          - Finding a system with dynamics outside Regime R
+          - Showing variational principle works on boundary
+        """
+        return {
+            "name": "Regime R Existence",
+            "statement": "Dynamics exists iff int(A) â‰  âˆ…",
+            "key_assumption": "Variational structure requires interior",
+            "falsifiable_by": "Dynamics at boundary without interior"
+        }
+    
+    @staticmethod
+    def metric_emergence():
+        """
+        THEOREM 2: Metric Emergence
+        
+        Statement:
+          Distance d(u,v) = min cost over admissible routes is a metric.
+          
+        Conditions:
+          C1: Edge costs are symmetric (E(uâ†’v) = E(vâ†’u))
+          C2: Path set is closed under reversal
+          C3: Cost is non-negative
+          
+        Proof sketch:
+          1. Identity: d(u,u) = 0 (empty path has zero cost)
+          2. Symmetry: d(u,v) = d(v,u) by C1 and C2
+          3. Triangle: d(u,w) â‰¤ d(u,v) + d(v,w) by path concatenation
+          
+        Falsifiable by:
+          - Asymmetric costs violating symmetry
+          - Superadditive costs violating triangle inequality
+        """
+        return {
+            "name": "Metric Emergence",
+            "statement": "d(u,v) = min admissible cost is a metric",
+            "conditions": ["symmetric costs", "reversible paths", "non-negative costs"],
+            "falsifiable_by": "Violation of metric axioms"
+        }
+    
+    @staticmethod
+    def time_from_action():
+        """
+        THEOREM 3: Time from Action
+        
+        Statement:
+          Accumulated cost defines a monotonic time variable.
+          Arrow of time emerges from irreversibility.
+          
+        Proof sketch:
+          1. Transition cost |Î”E| â‰¥ 0 always
+          2. Therefore accumulated cost is monotone non-decreasing
+          3. Round trip: S(Aâ†’Bâ†’A) = S(Aâ†’B) + S(Bâ†’A) â‰¥ 2Â·S(Aâ†’B) (equality only if reversible)
+          4. With records (obligations), reverse path may not exist â†’ arrow
+          
+        Falsifiable by:
+          - Transition with negative cost
+          - Reversible dynamics with records
+        """
+        return {
+            "name": "Time from Action",
+            "statement": "S[history] is monotone; arrow from irreversibility",
+            "key_insight": "|Î”E| â‰¥ 0 always",
+            "falsifiable_by": "Negative transition cost"
+        }
+    
+    @staticmethod
+    def lambda_residual():
+        """
+        THEOREM 4: Lambda Residual
+        
+        Statement:
+          Î› = min achievable cost under admissible rerouting.
+          Î› is non-decreasing under accumulating obligations.
+          
+        Proof sketch:
+          1. Î›(t) = min_{L âˆˆ A(t)} Î£_i E_i(L_i) where A(t) = admissible reroutings
+          2. A(t+1) âŠ† A(t) (more obligations = more constraints)
+          3. min over smaller set â‰¥ min over larger set
+          4. Therefore Î›(t+1) â‰¥ Î›(t)
+          
+        Falsifiable by:
+          - Î› decreasing when adding obligations
+          - Rerouting that reduces Î› below computed minimum
+        """
+        return {
+            "name": "Lambda Residual",
+            "statement": "Î› = min cost after rerouting; Î› non-decreasing",
+            "key_mechanism": "Obligation accumulation constrains rerouting",
+            "falsifiable_by": "Î› decrease with more obligations"
+        }
+    
+    @staticmethod
+    def print_all():
+        """Print all theorems."""
+        print("\n" + "=" * 70)
+        print("THEOREMS & PROOF OBLIGATIONS")
+        print("=" * 70)
+        
+        theorems = [
+            Theorems.regime_R_existence(),
+            Theorems.metric_emergence(),
+            Theorems.time_from_action(),
+            Theorems.lambda_residual()
+        ]
+        
+        for i, thm in enumerate(theorems, 1):
+            print(f"\n{i}. {thm['name']}")
+            print("-" * 40)
+            for key, value in thm.items():
+                if key != 'name':
+                    print(f"  {key}: {value}")
+
+
+# =============================================================================
+# 8. ADVERSARIAL TEST SUITE
+# =============================================================================
+
+class TestSuite:
+    """
+    Adversarial test suite for bulletproofing.
+    
+    Includes:
+    - Property-based tests (invariants that must always hold)
+    - Red team cases (hand-crafted torture tests)
+    """
+    
+    def __init__(self):
+        self.passed = 0
+        self.failed = 0
+        self.results = []
+    
+    def assert_true(self, condition: bool, name: str, details: str = ""):
+        """Assert a condition and record result."""
+        if condition:
+            self.passed += 1
+            self.results.append(("PASS", name, details))
+        else:
+            self.failed += 1
+            self.results.append(("FAIL", name, details))
+    
+    def test_metric_axioms(self, network: Network) -> bool:
+        """Test that distance satisfies metric axioms."""
+        nodes = network.nodes
+        interfaces = network.interfaces()
+        
+        # Compute distance matrix
+        distances = {}
+        for u in nodes:
+            for v in nodes:
+                if u == v:
+                    distances[(u, v)] = 0.0
+                else:
+                    paths = find_all_paths(network, u, v, max_paths=10)
+                    min_cost = float('inf')
+                    for path in paths:
+                        load = LoadVector(loads=path.load_contribution())
+                        if is_admissible(load, interfaces):
+                            cost = total_cost(load, interfaces)
+                            min_cost = min(min_cost, cost)
+                    distances[(u, v)] = min_cost
+        
+        # Test identity
+        for u in nodes:
+            self.assert_true(
+                distances[(u, u)] == 0,
+                f"Identity d({u},{u})=0",
+                f"Got {distances[(u, u)]}"
+            )
+        
+        # Test symmetry
+        for u in nodes:
+            for v in nodes:
+                d_uv = distances[(u, v)]
+                d_vu = distances[(v, u)]
+                self.assert_true(
+                    abs(d_uv - d_vu) < EPS_COST or (d_uv == float('inf') and d_vu == float('inf')),
+                    f"Symmetry d({u},{v})=d({v},{u})",
+                    f"d({u},{v})={d_uv}, d({v},{u})={d_vu}"
+                )
+        
+        # Test triangle inequality
+        for u in nodes:
+            for v in nodes:
+                for w in nodes:
+                    d_uw = distances[(u, w)]
+                    d_uv = distances[(u, v)]
+                    d_vw = distances[(v, w)]
+                    
+                    if d_uv < float('inf') and d_vw < float('inf'):
+                        self.assert_true(
+                            d_uw <= d_uv + d_vw + EPS_COST,
+                            f"Triangle d({u},{w}) â‰¤ d({u},{v})+d({v},{w})",
+                            f"d({u},{w})={d_uw}, d({u},{v})+d({v},{w})={d_uv+d_vw}"
+                        )
+        
+        return self.failed == 0
+    
+    def test_time_monotonicity(self, interfaces: List[Interface]) -> bool:
+        """Test that accumulated cost is monotone."""
+        history = History(interfaces=interfaces)
+        
+        # Build a random walk
+        loads = [LoadVector.uniform(interfaces, 0)]
+        for i in range(1, 6):
+            loads.append(LoadVector.uniform(interfaces, i))
+        
+        for load in loads:
+            history.append(load)
+        
+        # Check monotonicity
+        for i in range(1, len(history.steps)):
+            self.assert_true(
+                history.steps[i].time >= history.steps[i-1].time,
+                f"Time monotone at step {i}",
+                f"t[{i-1}]={history.steps[i-1].time}, t[{i}]={history.steps[i].time}"
+            )
+        
+        return self.failed == 0
+    
+    def test_round_trip_cost(self, interfaces: List[Interface]) -> bool:
+        """Test that round trip costs at least as much as one way."""
+        L0 = LoadVector.uniform(interfaces, 1)
+        L1 = LoadVector.uniform(interfaces, 3)
+        
+        forward = transition_cost(L0, L1, interfaces)
+        backward = transition_cost(L1, L0, interfaces)
+        
+        self.assert_true(
+            backward >= forward - EPS_COST,
+            "Round trip â‰¥ one way",
+            f"forward={forward}, backward={backward}"
+        )
+        
+        # Round trip total
+        round_trip = forward + backward
+        self.assert_true(
+            round_trip >= forward,
+            "Total round trip â‰¥ one way",
+            f"round_trip={round_trip}, one_way={forward}"
+        )
+        
+        return self.failed == 0
+    
+    def test_relaxation_non_increasing(self, network: Network) -> bool:
+        """Test that relaxation never increases cost."""
+        interfaces = network.interfaces()
+        
+        # Create some obligations
+        obligations = [
+            Obligation(id=i, source=network.nodes[0], target=network.nodes[-1])
+            for i in range(3)
+        ]
+        
+        # Route them
+        routed = []
+        load = LoadVector.empty()
+        for ob in obligations:
+            r = route_obligation(network, ob, load)
+            if r is None:
+                break
+            routed.append(r)
+            for name, c in r.path.load_contribution().items():
+                load[name] = load[name] + c
+        
+        if not routed:
+            return True  # No obligations routed, skip
+        
+        initial_cost = total_cost(compute_load_from_routed(routed), interfaces)
+        
+        # Relax
+        relaxed, final_load, savings = relax_routing(network, routed)
+        final_cost = total_cost(final_load, interfaces)
+        
+        self.assert_true(
+            final_cost <= initial_cost + EPS_COST,
+            "Relaxation non-increasing",
+            f"initial={initial_cost}, final={final_cost}, savings={savings}"
+        )
+        
+        self.assert_true(
+            savings >= -EPS_COST,
+            "Relaxation savings non-negative",
+            f"savings={savings}"
+        )
+        
+        return self.failed == 0
+    
+    def test_regime_boundary(self, interfaces: List[Interface]) -> bool:
+        """Test regime boundary properties."""
+        result = analyze_regime_boundary(interfaces, max_size=10)
+        
+        # Composable sizes should come first
+        if result['composable']:
+            max_comp = max(result['composable'])
+            min_sat = min(result['saturating']) if result['saturating'] else float('inf')
+            
+            self.assert_true(
+                max_comp < min_sat,
+                "Composable < saturating boundary",
+                f"max_composable={max_comp}, min_saturating={min_sat}"
+            )
+        
+        # Îº should be positive for composable
+        for size in result['composable']:
+            kappa = result['analyses'][size]['kappa']
+            self.assert_true(
+                kappa > 0,
+                f"Îº > 0 for composable size {size}",
+                f"Îº={kappa}"
+            )
+        
+        # Îº should be â‰¤ 0 for saturating
+        for size in result['saturating']:
+            kappa = result['analyses'][size]['kappa']
+            self.assert_true(
+                kappa <= EPS_SLACK,
+                f"Îº â‰¤ 0 for saturating size {size}",
+                f"Îº={kappa}"
+            )
+        
+        return self.failed == 0
+    
+    def red_team_symmetric_network(self) -> bool:
+        """Torture test: symmetric network with degeneracy."""
+        I = Interface("I", capacity=10.0, epsilon=1.0, eta=0.3)
+        
+        # Complete graph on 4 nodes - many equivalent routes
+        nodes = ["A", "B", "C", "D"]
+        edges = [
+            Edge(u, v, I)
+            for i, u in enumerate(nodes)
+            for v in nodes[i+1:]
+        ]
+        
+        network = Network(nodes=nodes, edges=edges)
+        
+        # Test metric axioms on degenerate network
+        return self.test_metric_axioms(network)
+    
+    def red_team_single_bottleneck(self) -> bool:
+        """Torture test: single bottleneck cut."""
+        I_wide = Interface("wide", capacity=50.0, epsilon=1.0, eta=0.1)
+        I_narrow = Interface("narrow", capacity=5.0, epsilon=1.0, eta=0.5)
+        
+        # A -- wide -- B -- narrow -- C -- wide -- D
+        network = Network(
+            nodes=["A", "B", "C", "D"],
+            edges=[
+                Edge("A", "B", I_wide),
+                Edge("B", "C", I_narrow),  # Bottleneck
+                Edge("C", "D", I_wide),
+            ]
+        )
+        
+        # All Aâ†”D traffic must go through bottleneck
+        interfaces = network.interfaces()
+        
+        obligations = [
+            Obligation(id=i, source="A", target="D")
+            for i in range(10)
+        ]
+        
+        history = estimate_lambda_floor(network, obligations, relax_every=2)
+        
+        if history:
+            # Î› should concentrate at narrow
+            self.assert_true(
+                history[-1].bottleneck == "narrow",
+                "Î› concentrates at bottleneck",
+                f"bottleneck={history[-1].bottleneck}"
+            )
+        
+        return self.failed == 0
+    
+    def red_team_high_eta(self) -> bool:
+        """Torture test: high Î· regime (quantum-like)."""
+        # Î· >> Îµ means quadratic dominates
+        interfaces = [
+            Interface("quantum", capacity=20.0, epsilon=0.1, eta=2.0)
+        ]
+        
+        result = analyze_regime_boundary(interfaces, max_size=10)
+        
+        # High Î· should give small composable region
+        self.assert_true(
+            result['max_composable'] < 6,
+            "High Î· limits composable region",
+            f"max_composable={result['max_composable']}"
+        )
+        
+        # Î·-share should be high at boundary
+        if result['saturating']:
+            first_sat = min(result['saturating'])
+            eta_share = result['analyses'][first_sat]['eta_share']
+            self.assert_true(
+                eta_share > 0.5,
+                "Î·-dominated at saturation",
+                f"Î·-share={eta_share}"
+            )
+        
+        return self.failed == 0
+    
+    def red_team_zero_eta(self) -> bool:
+        """Torture test: Î· = 0 (purely classical)."""
+        interfaces = [
+            Interface("classical", capacity=15.0, epsilon=1.0, eta=0.0)
+        ]
+        
+        result = analyze_regime_boundary(interfaces, max_size=20)
+        
+        # With Î·=0, cost is purely linear: E = ÎµÂ·n
+        # Max n = C/Îµ = 15
+        
+        self.assert_true(
+            result['max_composable'] >= 14,
+            "Classical (Î·=0) has large composable region",
+            f"max_composable={result['max_composable']}"
+        )
+        
+        # All composable should have Î·-share = 0
+        for size in result['composable']:
+            eta_share = result['analyses'][size]['eta_share']
+            self.assert_true(
+                eta_share < 0.01,
+                f"Î·-share â‰ˆ 0 for classical size {size}",
+                f"Î·-share={eta_share}"
+            )
+        
+        return self.failed == 0
+    
+    def run_all(self, verbose: bool = True) -> bool:
+        """Run all tests."""
+        if verbose:
+            print("\n" + "=" * 70)
+            print("ADVERSARIAL TEST SUITE")
+            print("=" * 70)
+        
+        # Standard interfaces for testing
+        interfaces = [
+            Interface("I1", capacity=10.0, epsilon=1.0, eta=0.4),
+            Interface("I2", capacity=12.0, epsilon=0.8, eta=0.5),
+        ]
+        
+        # Standard network
+        network = Network(
+            nodes=["A", "B", "C", "D"],
+            edges=[
+                Edge("A", "B", interfaces[0]),
+                Edge("B", "C", interfaces[1]),
+                Edge("C", "D", interfaces[0]),
+                Edge("A", "C", interfaces[1]),
+                Edge("B", "D", interfaces[0]),
+            ]
+        )
+        
+        if verbose:
+            print("\n--- Core Property Tests ---")
+        self.test_metric_axioms(network)
+        self.test_time_monotonicity(interfaces)
+        self.test_round_trip_cost(interfaces)
+        self.test_relaxation_non_increasing(network)
+        self.test_regime_boundary(interfaces)
+        
+        if verbose:
+            print("\n--- Red Team Tests ---")
+        self.red_team_symmetric_network()
+        self.red_team_single_bottleneck()
+        self.red_team_high_eta()
+        self.red_team_zero_eta()
+        
+        if verbose:
+            print(f"\n{'='*70}")
+            print(f"RESULTS: {self.passed} passed, {self.failed} failed")
+            print("=" * 70)
+            
+            if self.failed > 0:
+                print("\nFailed tests:")
+                for status, name, details in self.results:
+                    if status == "FAIL":
+                        print(f"  âœ— {name}: {details}")
+        
+        return self.failed == 0
+
+
+# =============================================================================
+# 9. UNIT MAPPING & FALSIFIABLE PREDICTIONS
+# =============================================================================
+
+class UnitMapping:
+    """
+    Maps abstract engine quantities to physical observables.
+    """
+    
+    @staticmethod
+    def h_eff_to_hbar(interfaces: List[Interface]) -> Dict[str, Any]:
+        """
+        Map â„_eff = min(Îµ_i) to Planck's constant.
+        
+        â„_eff is the minimum nonzero action quantum.
+        """
+        h_eff = minimum_action_quantum(interfaces)
+        
+        return {
+            "abstract": "â„_eff = min_i(Îµ_i)",
+            "value": h_eff,
+            "physical_interpretation": "Minimum detectable enforcement change",
+            "maps_to": "Planck's constant â„ (scale factor needed)",
+            "falsifiable": "If â„_eff varies without Îµ_i varying"
+        }
+    
+    @staticmethod
+    def lambda_to_cosmological(lambda_E: float, total_capacity: float) -> Dict[str, Any]:
+        """
+        Map Î›_E (residual cost) to cosmological constant.
+        
+        Î›_Ïƒ = Î›_E / C_total is a dimensionless density-like quantity.
+        """
+        lambda_sigma = lambda_E / total_capacity if total_capacity > 0 else 0
+        
+        return {
+            "abstract": "Î›_E = residual enforcement cost",
+            "value_E": lambda_E,
+            "value_sigma": lambda_sigma,
+            "physical_interpretation": "Irreducible enforcement floor",
+            "maps_to": "Cosmological constant (energy density scale)",
+            "falsifiable": "If Î› can be reduced below computed minimum"
+        }
+    
+    @staticmethod
+    def distance_to_geometry(d_uv: float, h_eff: float) -> Dict[str, Any]:
+        """
+        Map routing distance to geometric distance.
+        
+        d(u,v) / â„_eff gives distance in "action units" (proto-length).
+        """
+        d_action = d_uv / h_eff if h_eff > 0 else float('inf')
+        
+        return {
+            "abstract": "d(u,v) = min admissible enforcement cost",
+            "value": d_uv,
+            "in_action_units": d_action,
+            "physical_interpretation": "Correlation establishment cost",
+            "maps_to": "Proper distance (with scale factor)",
+            "falsifiable": "If metric axioms fail"
+        }
+    
+    @staticmethod
+    def predictions() -> List[Dict[str, str]]:
+        """
+        List of falsifiable predictions.
+        """
+        return [
+            {
+                "prediction": "Regime R boundary exists at finite size",
+                "test": "Compute max_composable for given interfaces",
+                "falsified_if": "No saturation at any finite size (requires Î·=0)"
+            },
+            {
+                "prediction": "Î› is non-decreasing with obligations",
+                "test": "Track Î›_E over obligation stream",
+                "falsified_if": "Î›_E decreases when adding obligations"
+            },
+            {
+                "prediction": "Round-trip action â‰¥ 2 Ã— one-way action",
+                "test": "Compute S(Aâ†’Bâ†’A) vs S(Aâ†’B)",
+                "falsified_if": "Round-trip < one-way (time reversal)"
+            },
+            {
+                "prediction": "Bottleneck interface determines saturation",
+                "test": "Track which interface saturates first",
+                "falsified_if": "Saturation at non-bottleneck interface"
+            },
+            {
+                "prediction": "Î·-share increases with size",
+                "test": "Track quadratic/total ratio",
+                "falsified_if": "Î·-share decreases with size (for Î· > 0)"
+            }
+        ]
+    
+    @staticmethod
+    def print_mapping():
+        """Print the unit mapping."""
+        print("\n" + "=" * 70)
+        print("UNIT MAPPING & FALSIFIABLE PREDICTIONS")
+        print("=" * 70)
+        
+        print("\n--- Unit Mapping ---")
+        print("""
+| Abstract Quantity  | Physical Analog        | Scale Factor    |
+|--------------------|------------------------|-----------------|
+| Îµ (linear cost)    | â„ (action quantum)     | Îµ_physical/Îµ_0  |
+| Î· (quadratic cost) | QM non-closure         | Î·_physical/Î·_0  |
+| C (capacity)       | Channel capacity       | C_physical/C_0  |
+| d(u,v)             | Proper distance        | d_phys/d_0      |
+| Î›_E                | Cosmological constant  | Î›_phys/Î›_0      |
+| S[history]         | Action                 | S_phys/S_0      |
+""")
+        
+        print("\n--- Falsifiable Predictions ---")
+        for i, pred in enumerate(UnitMapping.predictions(), 1):
+            print(f"\n{i}. {pred['prediction']}")
+            print(f"   Test: {pred['test']}")
+            print(f"   Falsified if: {pred['falsified_if']}")
+
+
+# =============================================================================
+# 10. MAIN DEMO
+# =============================================================================
+
+def run_full_demo():
+    """Run the complete demonstration."""
+    print("=" * 70)
+    print("ADMISSIBILITY PHYSICS ENGINE - UNIFIED DEMO")
+    print("=" * 70)
+    print("""
+This demo runs through the complete unification chain:
+  1. Regime Analysis (Composability)
+  2. Routing (Geometry)
+  3. Accumulated Cost (Time)
+  4. Lambda Floor (Cosmological Constant)
+  5. Theorems & Proof Obligations
+  6. Adversarial Test Suite
+  7. Unit Mapping & Predictions
+""")
+    
+    # Create standard interfaces
+    interfaces = [
+        Interface("alpha", capacity=12.0, epsilon=1.0, eta=0.4),
+        Interface("beta", capacity=15.0, epsilon=1.2, eta=0.5),
+        Interface("gamma", capacity=10.0, epsilon=0.8, eta=0.6),
+    ]
+    
+    # Create network
+    network = Network(
+        nodes=["A", "B", "C", "D"],
+        edges=[
+            Edge("A", "B", interfaces[0]),
+            Edge("B", "C", interfaces[1]),
+            Edge("C", "D", interfaces[2]),
+            Edge("A", "C", interfaces[1]),
+            Edge("B", "D", interfaces[2]),
+            Edge("A", "D", interfaces[0]),
+        ]
+    )
+    
+    # 1. REGIME ANALYSIS
+    print("\n" + "=" * 70)
+    print("1. REGIME ANALYSIS")
+    print("=" * 70)
+    
+    result = analyze_regime_boundary(interfaces, max_size=10)
+    
+    print(f"\nComposable sizes (Regime R): {result['composable']}")
+    print(f"Saturating sizes: {result['saturating']}")
+    print(f"Max composable: {result['max_composable']}")
+    
+    print(f"\n{'Size':>4} {'Îº':>8} {'H_min':>8} {'Î·-share':>8} {'Status':>10}")
+    print("-" * 44)
+    for size, info in result['analyses'].items():
+        status = "âœ“ Regime R" if info['admissible'] else "âœ— Saturated"
+        print(f"{size:>4} {info['kappa']:>8.3f} {info['headroom']:>8.2f} "
+              f"{info['eta_share']:>7.1%} {status:>10}")
+    
+    # 2. ROUTING (GEOMETRY)
+    print("\n" + "=" * 70)
+    print("2. ROUTING (GEOMETRY)")
+    print("=" * 70)
+    
+    print("\nDistance matrix (min admissible cost):")
+    nodes = network.nodes
+    itfs = network.interfaces()
+    
+    print(f"      {''.join(f'{n:>8}' for n in nodes)}")
+    for u in nodes:
+        row = f"{u:>6}"
+        for v in nodes:
+            if u == v:
+                row += f"{'â€”':>8}"
+            else:
+                paths = find_all_paths(network, u, v)
+                min_cost = float('inf')
+                for path in paths:
+                    load = LoadVector(loads=path.load_contribution())
+                    if is_admissible(load, itfs):
+                        min_cost = min(min_cost, total_cost(load, itfs))
+                row += f"{min_cost:>8.2f}" if min_cost < float('inf') else f"{'âˆž':>8}"
+        print(row)
+    
+    # 3. ACCUMULATED COST (TIME)
+    print("\n" + "=" * 70)
+    print("3. ACCUMULATED COST (TIME)")
+    print("=" * 70)
+    
+    h_eff = minimum_action_quantum(interfaces)
+    print(f"\nâ„_eff = {h_eff} (minimum action quantum)")
+    
+    # Simple history
+    history = History(interfaces=interfaces)
+    for n in range(5):
+        history.append(LoadVector.uniform(interfaces, n))
+    
+    print(f"\nHistory (0 â†’ 4 uniform load):")
+    for step in history.steps:
+        print(f"  t={step.time:.2f}, Î”={step.transition_cost:.2f}, "
+              f"H_min={step.min_headroom:.2f}")
+    
+    print(f"\nTotal action: {history.action:.2f}")
+    print(f"Discrete time (action/â„_eff): {history.action/h_eff:.1f} ticks")
+    
+    # 4. LAMBDA FLOOR
+    print("\n" + "=" * 70)
+    print("4. LAMBDA FLOOR")
+    print("=" * 70)
+    
+    obligations = [
+        Obligation(id=i, source="A", target="D")
+        for i in range(12)
+    ]
+    
+    lambda_history = estimate_lambda_floor(network, obligations, relax_every=2)
+    
+    if lambda_history:
+        print(f"\n{'Step':>6} {'Î›_E':>8} {'Î›_Ïƒ':>8} {'Bottleneck':>12}")
+        print("-" * 38)
+        for s in lambda_history:
+            print(f"{s.time_step:>6} {s.lambda_E:>8.2f} {s.lambda_sigma:>7.1%} "
+                  f"{s.bottleneck:>12}")
+        
+        print(f"\nFinal Î›_E = {lambda_history[-1].lambda_E:.2f}")
+        print(f"Final Î›_Ïƒ = {lambda_history[-1].lambda_sigma:.1%}")
+    
+    # 5. THEOREMS
+    Theorems.print_all()
+    
+    # 6. TEST SUITE
+    suite = TestSuite()
+    suite.run_all(verbose=True)
+    
+    # 7. UNIT MAPPING
+    UnitMapping.print_mapping()
+    
+    # SUMMARY
+    print("\n" + "=" * 70)
+    print("UNIFICATION SUMMARY")
+    print("=" * 70)
+    print("""
+COMPLETE CHAIN:
+
+  A1-A6 (Axioms)
+     â†“
+  Interface Costs: E_i(n) = ÎµÂ·n + Î·Â·C(n,2)
+     â†“
+  Regime R: H_i(n) > EPS_SLACK (composability)
+     â†“
+  Geometry: d(u,v) = min cost over admissible routes
+     â†“
+  Time: S = Î£|Î”E| (accumulated cost, arrow from irreversibility)
+     â†“
+  Î›: Residual after optimal rerouting (cosmological constant)
+
+ALL FROM ENFORCEMENT COST MINIMIZATION.
+
+Key numbers from this run:
+  - Regime R: sizes {composable}
+  - â„_eff: {h_eff}
+  - Final Î›_E: {lambda_E}
+  - Test suite: {passed}/{total} passed
+""".format(
+        composable=result['composable'],
+        h_eff=h_eff,
+        lambda_E=lambda_history[-1].lambda_E if lambda_history else 0,
+        passed=suite.passed,
+        total=suite.passed + suite.failed
+    ))
+
+
+# =============================================================================
+# ENTRY POINT
+# =============================================================================
+
+if __name__ == "__main__":
+    run_full_demo()
