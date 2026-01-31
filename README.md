@@ -1,91 +1,27 @@
 Admissibility Physics
 
-Admissibility Physics is a constraint-first research program that rebuilds fundamental physics from a single pre-dynamical principle:
+Admissibility Physics is a constraint-first research program that rebuilds fundamental physics from a single pre-dynamical principle: a physical distinction exists if and only if the universe commits finite resources to enforce it. Rather than assuming states, dynamics, probability, or spacetime as primitives, the framework asks a prior question: which distinctions are physically meaningful at all under finite enforceability? All familiar physical structure emerges as bookkeeping required to represent what can be jointly enforced.
 
-A physical distinction exists if and only if the universe commits finite resources to enforce it.
+Every physical theory relies on distinctions—between states, outcomes, regions, and histories. Standard formalisms quietly assume that once drawn, these distinctions persist automatically and compose freely. Admissibility Physics removes that assumption. When enforcement capacity is finite and localized at interfaces, not all correlations can coexist, composition can fail, and global descriptions need not exist. Irreversibility becomes structural rather than statistical, and mathematical representations apply only within restricted regimes.
 
-Rather than postulating states, dynamics, probability, or spacetime as primitive, the framework asks a prior question: Which distinctions are physically meaningful at all, given finite enforcement capacity?
-All subsequent structure—quantum mechanics, entropy, time, geometry, and gravity—emerges as bookkeeping required to represent what can be jointly enforced.
+From this single constraint, the framework derives a broad range of physical structure. In particular, it shows that:
 
-Core Idea
+admissible correlation sets are generically not closed under composition, explaining correlation competition, monogamy, and the failure of global state descriptions;
 
-Every physical theory relies on distinctions: between states, outcomes, regions, histories. Standard formalisms silently assume these distinctions persist automatically and compose freely.
+entropy is irreversibly committed correlation capacity at interfaces, not uncertainty or missing information;
 
-Admissibility Physics makes this assumption explicit—and removes it.
+time emerges as the ordered accumulation of irreversible enforcement, rather than as a background parameter;
 
-If enforcing distinctions requires finite resources localized at interfaces, then:
+quantum mechanics arises as the unique admissibility-preserving bookkeeping in coherent regimes, yielding Hilbert space structure, tensor products, CPTP maps, and the Born rule without postulation;
 
-not all correlations can coexist,
+dynamics emerges only in regular regimes where enforcement cost is locally additive, producing variational principles and equations of motion as effective descriptions;
 
-composition can fail,
+geometry encodes correlation cost, with distance measuring irreducible enforcement and curvature reflecting capacity gradients, leading uniquely to Einstein’s equations in four dimensions;
 
-global descriptions need not exist,
+saturation marks sharp structural boundaries—knees, horizons, and measurement-like events—where smooth description necessarily breaks down.
 
-irreversibility is structural rather than statistical,
+This repository contains the reference implementation of the admissibility calculus and its downstream representational regimes. The code explicitly models finite capacity at interfaces, global admissibility conditions, entropy and ledger structures, quantum-admissible representations, variational dynamics where they exist, geometric reconstruction from correlation cost, and diagnostics for saturation and regime failure. Assumptions and regime conditions are made explicit, and representations are intentionally allowed to fail when their applicability ends.
 
-and familiar mathematical representations apply only in restricted regimes.
+This project is not a particle simulator, a stochastic model, or a dynamics-first theory. It does not assume global state spaces or universal equations of motion. Instead, it is structure-first: it determines which descriptions are physically admissible before asking how they evolve.
 
-The framework formalizes this using admissibility: a global joint-enforceability condition under finite correlation capacity.
-
-What the Framework Derives
-
-Starting from finite enforceability alone, the program derives:
-
-Non-closure under composition
-Jointly admissible correlations need not compose, explaining monogamy, global state failure, and competition for structure.
-
-Entropy as committed correlation capacity
-Entropy is not uncertainty or probability—it is irreversible enforcement already paid at interfaces.
-
-Time as ordered commitment
-Temporal direction emerges from monotonic accumulation of irreversible commitments, not from dynamics.
-
-Quantum mechanics as admissible representation
-Hilbert space, linearity, tensor products, CPTP maps, and the Born rule arise as the unique bookkeeping structures that preserve admissibility in coherent regimes.
-
-Dynamics as extremal admissible reallocation
-Variational principles and equations of motion emerge only when enforcement cost is locally additive; they fail generically near saturation.
-
-Geometry as correlation cost
-Distance measures irreducible enforcement cost; curvature reflects capacity gradients; Einstein’s equations arise as the unique admissibility-preserving closure in four dimensions.
-
-Sharp regime boundaries
-Saturation produces knees, horizons, measurement-like events, and breakdowns of smooth description—structural limits rather than dynamical pathologies.
-
-What This Codebase Implements
-
-This repository contains the reference implementation of the admissibility calculus and its downstream representational regimes. It includes:
-
-capacity accounting at interfaces,
-
-admissibility checks and cut-set bounds,
-
-entropy and irreversible ledger structures,
-
-quantum-admissible representations,
-
-variational dynamics in regular regimes,
-
-geometric reconstruction from correlation cost,
-
-and diagnostics for saturation and regime failure.
-
-The code is intentionally explicit about assumptions, regime conditions, and failure modes. Where a representation ceases to be meaningful, the code stops—by design.
-
-What This Is Not
-
-Not a simulation of particles or fields
-
-Not a probabilistic or stochastic model
-
-Not a numerical solver for fundamental constants
-
-Not dynamics-first or state-space-first physics
-
-Admissibility Physics is structure-first: it determines what physics is allowed to describe before asking how descriptions evolve.
-
-Status and Scope
-
-This project is active, research-grade, and exploratory. Some results are structural necessities; others are minimal selections or empirically anchored. Numerical values are treated honestly where derivation is not yet possible.
-
-The goal is not to replace existing successful theories, but to explain why their structure exists, where it applies, and why it must sometimes fail.
+Admissibility Physics is an active, research-grade program. Some results are structurally necessary, others are minimal selections or empirically anchored, and numerical values are treated honestly where derivation is not yet possible. The aim is not to replace successful physical theories, but to explain why their structure exists, where it applies, and why it must sometimes fail.
